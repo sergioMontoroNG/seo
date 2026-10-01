@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="/static/app.css">
+  <title>Newgarden SEO Updater</title>
+</head>
+<body>
+  <a class="skip-link" href="#main">Saltar al contenido</a>
+  <header class="page-header">
+    <p class="eyebrow">Newgarden · Herramienta interna</p>
+    <h1>Revisión SEO de productos</h1>
+    <p>Revisa el archivo y los cambios antes de aplicarlos. La carga y el análisis nunca escriben en Shopify.</p>
+  </header>
+  <main id="main" tabindex="-1">
+    <section class="panel" aria-labelledby="upload-title">
+      <h2 id="upload-title">Analizar un archivo</h2>
+      <form id="upload-form" class="upload-form">
+        <div class="form-field">
+          <label for="store">Tienda</label>
+          <select id="store" name="store_code" required>{{stores}}</select>
+        </div>
+        <div class="form-field file-field">
+          <label for="file">Archivo XLSX</label>
+          <input id="file" name="file" type="file" accept=".xlsx" required aria-describedby="file-help">
+          <p id="file-help" class="help">Formato .xlsx · máximo 25 MB</p>
+        </div>
+        <button id="analyze" type="submit">Analizar XLSX</button>
+      </form>
+    </section>
+    <p id="msg" class="feedback" role="status" aria-live="polite" aria-atomic="true"></p>
+    <p id="error-msg" class="feedback danger" role="alert" aria-atomic="true"></p>
+    <section id="result" aria-label="Resultado del análisis" aria-busy="false"></section>
+    <section class="panel history-panel" aria-labelledby="history-title">
+      <h2 id="history-title">Histórico</h2>
+      <div id="history"><p class="muted">Cargando ejecuciones…</p></div>
+    </section>
+  </main>
+  <script src="/static/app.js" defer></script>
+</body>
+</html>
