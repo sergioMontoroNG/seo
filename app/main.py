@@ -227,7 +227,7 @@ async def include(pid:int,request:Request):
  if not changed: raise HTTPException(404,'Producto no encontrado')
  return {'ok':True}
 
-def build_input(p):
+def build_input(p,current=None):
  inp={'id':p['product_id']}
  for ch in p['changes_json'] or []:
   f=ch['field']; v=ch['after']
@@ -237,6 +237,11 @@ def build_input(p):
    inp.setdefault('seo',{})['title' if f=='seoTitle' else 'description']=v
   elif f=='shortDescription': inp.setdefault('metafields',[]).append({'namespace':'custom','key':'descripcion_corta','type':'multi_line_text_field','value':v})
   elif f=='faq': inp.setdefault('metafields',[]).append({'namespace':'newgarden','key':'faq','type':'rich_text_field','value':v})
+ # ProductUpdateInput.seo replaces the whole object: a missing subfield is cleared in Shopify.
+ # Always resend the untouched one from the live snapshot.
+ if 'seo' in inp and current:
+  for key,field in (('title','seoTitle'),('description','seoDescription')):
+   if key not in inp['seo'] and current.get(field) is not None: inp['seo'][key]=current[field]
  return inp
 @app.post('/api/runs/{rid}/execute')
 async def execute(rid):
@@ -265,13 +270,15 @@ async def execute_worker(rid):
     with db() as c: c.execute("update run_products set status='STALE_DATA',errors_json=%s::jsonb where id=%s",(json.dumps(['Shopify cambió desde el análisis; se omitió la escritura.']),p['id']))
     overall='COMPLETED_WITH_ERRORS'; continue
    with db() as c:c.execute("update run_products set status='UPDATING' where id=%s",(p['id'],))
-   data=await gql(run['store_code'],token,UPDATE,{'product':build_input({'product_id':p['productId'],'changes_json':p['changes']})})
+   data=await gql(run['store_code'],token,UPDATE,{'product':build_input({'product_id':p['productId'],'changes_json':p['changes']},actual)})
    result=data['productUpdate']; user_errors=result.get('userErrors') or []
    if user_errors: raise RuntimeError(json.dumps(user_errors,ensure_ascii=False))
    # verify by GID: this remains valid after a handle change.
    afternode=(await gql(run['store_code'],token,'query($id:ID!){node(id:$id){... on Product{id handle title descriptionHtml seo{title description} short:metafield(namespace:"custom",key:"descripcion_corta"){value} faq:metafield(namespace:"newgarden",key:"faq"){value}}}}',{'id':p['productId']}))['node']
    after=snapshot(afternode)
    failed=[ch['field'] for ch in p['changes'] if normalize(ch['field'],after.get(ch['target']))!=normalize(ch['field'],ch['after'])]
+   changed={ch['field'] for ch in p['changes']}
+   failed+=[f'{f} (borrado sin pedirlo)' for f in ('seoTitle','seoDescription') if f not in changed and normalize(f,after.get(f))!=normalize(f,actual.get(f))]
    if failed: status='VERIFICATION_FAILED'; overall='COMPLETED_WITH_ERRORS'; errs=[f'Verificación no coincide: {", ".join(failed)}']
    else: status='VERIFIED'; errs=[]
    with db() as c:c.execute('update run_products set status=%s,after_json=%s::jsonb,errors_json=%s::jsonb where id=%s',(status,json.dumps(after),json.dumps(errs),p['id']))
