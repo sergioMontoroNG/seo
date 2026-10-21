@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-import asyncio, json, os, re, uuid
+import asyncio, json, os, re, time, uuid
 from html import escape
 from datetime import datetime, timezone
 from pathlib import Path
@@ -63,9 +63,25 @@ def health():
   return {'status':'ok','database':'ok'}
  except Exception: return JSONResponse({'status':'degraded','database':'unavailable'},status_code=503)
 
+TOKEN_CACHE={}
+def client_credentials_token(code,s):
+ # Apps del Dev Dashboard (B2B, Web Corporativa): el token dura 24 h, se renueva con 5 min de margen.
+ cached=TOKEN_CACHE.get(code)
+ if cached and cached[1]-300>time.time(): return cached[0]
+ cid=os.getenv(s.get('client_id_env','')); secret=os.getenv(s.get('client_secret_env',''))
+ if not cid or not secret: raise HTTPException(503,f'Faltan las variables "{s.get("client_id_env")}" / "{s.get("client_secret_env")}" (client credentials) para la tienda {code}. Configúralas en .env y recrea el contenedor app.')
+ try:
+  r=httpx.post(f"https://{s['domain']}/admin/oauth/access_token",json={'grant_type':'client_credentials','client_id':cid,'client_secret':secret},timeout=30)
+  token=r.json().get('access_token') if r.status_code==200 else None
+  if not token: raise HTTPException(502,f'Shopify no concedió token a la app de la tienda {code} (HTTP {r.status_code}). Revisa el Client ID/secret y que la app esté instalada.')
+  TOKEN_CACHE[code]=(token,time.time()+int(r.json().get('expires_in',3600)))
+  return token
+ except httpx.HTTPError as e: raise HTTPException(502,f'No se pudo contactar con Shopify para renovar el token de {code}.') from e
+
 def store_cfg(code):
  s=STORES.get(code)
  if not s or not s.get('domain'): raise HTTPException(400,'Tienda no configurada en el servidor.')
+ if s.get('client_id_env'): return s,client_credentials_token(code,s)
  env=s.get('token_env',''); token=os.getenv(env) if env else None
  if not token: raise HTTPException(503,f'Falta la variable de entorno "{env}" indicada en token_env para la tienda {code}. Configúrala en .env y recrea el contenedor app.')
  return s,token
@@ -186,6 +202,13 @@ async def analyze(store_code:str=Form(...),file:UploadFile=File(...)):
   try:
    data=await gql(store_code,token,LOOKUP,{'identifier':{'handle':src['currentHandle']}})
    prod=data['productByIdentifier']
+   if not prod:
+    # El handle del Excel puede haberse renombrado en Shopify: se sigue el redirect que Shopify creó.
+    red=(await gql(store_code,token,'query($q:String!){urlRedirects(first:1,query:$q){nodes{path target}}}',{'q':'path:"/products/'+src['currentHandle']+'"'}))['urlRedirects']['nodes']
+    m=re.fullmatch(r'/products/([^/?#]+)',red[0]['target']) if red and red[0]['path']=='/products/'+src['currentHandle'] else None
+    if m:
+     prod=(await gql(store_code,token,LOOKUP,{'identifier':{'handle':m.group(1)}}))['productByIdentifier']
+     if prod and src['recommendedHandle'].strip().lower()==src['currentHandle']: src={**src,'recommendedHandle':prod['handle']}
    if not prod: state='NOT_FOUND'; errs.append('No existe producto con Slug actual.')
    else:
     before=snapshot(prod); product_id=before['productId']
